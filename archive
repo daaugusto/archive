@@ -204,7 +204,7 @@ then
    FILTER="xz --verbose -9e -c"
 fi
 
-printf "$FILE" | xargs -0 tar -c $TAR -- | $FILTER |
+printf "$FILE" | xargs -0 tar -c $TAR -- | eval $FILTER |
    if [ "$EXTENSION" = ".gpg" ]
    then
       gpg --yes --s2k-count 65011712 -c
