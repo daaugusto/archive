@@ -1,0 +1,232 @@
+#!/bin/sh
+
+usage()
+{
+   SCRIPT_NAME=`basename $0`
+   echo
+   echo "Archive and compress a file or directory using tar + [gz|bz2|xz|tar]"
+   echo ""
+   echo "Usage: $SCRIPT_NAME <files/dirs> [-d|-l|-R] [[-e -r <n>] [-n -t|-p <prefix>] [-xz|-bz2|-tar]] [-f] [-o output_dir|-]"
+   echo
+   echo "where:"
+   echo
+   echo "  -d"
+   echo "       decompress (untar)/decrypt the given file"
+   echo "  -l"
+   echo "       just list archives contents"
+   echo "  -R"
+   echo "       repair archive using parity files"
+   echo "  -o"
+   echo "       output directory (a single dash (-) redirects to the standard output)"
+   echo "  -e"
+   echo "       encrypt"
+   echo "  -r"
+   echo "       redundancy percentage (parity files)"
+   echo "  -p"
+   echo "       specifies a prefix (instead of using current date)"
+   echo "  -n"
+   echo "       tell not to add the creation date as prefix"
+   echo "  -t"
+   echo "       add time"
+   echo "  -f"
+   echo "       force overwriting"
+   echo "  -xz"
+   echo "       uses the tar.xz format instead of .tgz"
+   echo "  -bz2"
+   echo "       uses the tar.bz2 format instead of .tgz"
+   echo "  -tar"
+   echo "       don't use compression, just plain tar (.tar)"
+
+   exit 1
+}
+
+FORCE=""
+OUTPUT_DIR="."
+CREATION_TIME="$(date +%Y%m%d)-"
+PREFIX=""
+DECOMPRESS=""
+LIST=""
+KEEPOLD="-k"
+FILE=""
+EXTENSION=""
+RLEVEL=0
+REPAIR=""
+FORMAT="tgz"
+
+while [ $# -ge 1 ]; do
+   case $1 in
+      -o)    shift; OUTPUT_DIR="$1";;
+      -d)    DECOMPRESS="1";;
+      -l)    LIST="1";;
+      -R)    REPAIR="1";;
+      -n)    CREATION_TIME="";;
+      -t)    CREATION_TIME="${CREATION_TIME}$(date +%H_%M-)";;
+      -f)    FORCE="1"; KEEPOLD="";;
+      -p)    shift; PREFIX="$1";;
+      -e)    EXTENSION=".gpg";;
+      -r)    shift; RLEVEL=$1;;
+      -xz)   FORMAT="tar.xz";;
+      -bz2)  FORMAT="tar.bz2";;
+      -tar)  FORMAT="tar";;
+      -h)    usage;;
+      *)     FILE="${FILE}${1}\000";;
+   esac
+   shift
+done
+
+[ -z "$FILE" ] && usage
+[ -z "$OUTPUT_DIR" ] && usage
+[ -z "$PREFIX" ] || { PREFIX="${PREFIX}-"; CREATION_TIME=""; }
+
+IFS='' # Prevents 'while read' from trimming blank spaces
+################################################################################
+# REPAIR
+################################################################################
+if [ ! -z "$REPAIR" ]
+then
+   printf "$FILE" | xargs -0 -L 1 | while read F
+   do
+      # Is there associated parity files (.par2)? If so, try to repair the archive
+      [ -e "${F}.par2" ] || { echo "Parity files ($F.par2*) not found, repair is impossible..."; exit 1; }
+      echo "Trying to repair file '$F'...\n"
+      par2 r -N -v -- "${F}";
+   done || exit 1;
+
+   exit 0;
+fi
+
+################################################################################
+# DECOMPRESS
+################################################################################
+if [ ! -z "$DECOMPRESS" ]
+then
+   printf "$FILE" | xargs -0 -L 1 | while read F
+   do
+      # Are there associated parity files (.par2)? If so, check the integrity of the archive
+      if [ -e "${F}.par2" ]
+      then
+         par2 v -q -- "${F}";
+      fi || exit 1
+
+      TAR=""
+      if $(printf "$F"|cut -d. -f2-|grep -q -w "\(tar.gz\|tgz\)")
+      then
+         TAR="-z"
+      elif $(printf "$F"|cut -d. -f2-|grep -q -i -w "\(tar.bz2\|tbz\)")
+      then
+         TAR="-j"
+      elif $(printf "$F"|cut -d. -f2-|grep -q -i -w "\(tar.xz\|txz\)")
+      then
+         TAR="-J"
+      fi
+
+      OUTPUT_FLAG="-C"
+      if [ "${OUTPUT_DIR}" = "-" ] # Check if the user asked for output to stdout
+      then
+         OUTPUT_FLAG="-O"
+         OUTPUT_DIR=""
+      fi
+
+      # Is the file a GPG (encrypted) one?
+      if [ "$(printf "${F}"|awk -F'.' '{print tolower($NF)}')" = "gpg" ]
+      then
+         gpg --no-mdc-warning -d -- "$F"
+      else
+         cat -- "$F"
+      fi | tar $TAR -v -x -f - ${KEEPOLD} ${OUTPUT_FLAG} "${OUTPUT_DIR}"
+   done || exit 1;
+
+   exit 0;
+fi
+
+################################################################################
+# LIST ARCHIVE CONTENTS
+################################################################################
+if [ ! -z "$LIST" ]
+then
+   printf "$FILE" | xargs -0 -L 1 | while read F
+   do
+      # Is the file a GPG (encrypted) one?
+      if [ "$(printf "${F}"|awk -F'.' '{print tolower($NF)}')" = "gpg" ]
+      then
+         # Hmmm, decrypting is necessary as well as recognizing the actual format
+         TAR=""
+         if $(printf "$F"|cut -d. -f2-|grep -q -w "\(tar.gz\|tgz\)")
+         then
+            TAR="-z"
+         elif $(printf "$F"|cut -d. -f2-|grep -q -i -w "\(tar.bz2\|tbz\)")
+         then
+            TAR="-j"
+         elif $(printf "$F"|cut -d. -f2-|grep -q -i -w "\(tar.xz\|txz\)")
+         then
+            TAR="-J"
+         fi
+
+         gpg --no-mdc-warning -d -- "$F" | tar $TAR -v -t -f -
+      else # tar can handle automatically all compressed formats (cat is
+           # avoided here, just the header is read)
+         tar -v -t -f "$F"
+      fi
+   done || exit 1;
+
+   exit 0;
+fi
+
+################################################################################
+# ARCHIVE (Compress + encrypt + create redundancy)
+################################################################################
+
+if [ ! "${OUTPUT_DIR}" = "-" ]
+then
+   # Output filename
+   OUTPUTFILENAME="${PREFIX}${CREATION_TIME}$(printf "$FILE" | tr ' ' '_' | xargs -0 -L1 basename | paste -sd'-' | tr ' ' '-'| cut -c 1-42 | tr '/' '_').${FORMAT}${EXTENSION}"
+
+   [ -z "$FORCE" -a -e "${OUTPUT_DIR}/${OUTPUTFILENAME}" ] && { echo "Output file (${OUTPUT_DIR}/${OUTPUTFILENAME}) exists. Use '-f' to force overwriting." ; exit 1; }
+
+   mkdir -p "${OUTPUT_DIR}" 2>/dev/null
+
+   echo "Compressing files to ${OUTPUT_DIR}/${OUTPUTFILENAME}..."
+fi
+
+# Using pixz
+#printf "$FILE" | xargs -0 tar cf - | pixz -e > "${OUTPUT_DIR}/${OUTPUTFILENAME}"
+
+TAR=""
+FILTER="cat"
+if [ "$FORMAT" = "tgz" ]
+then
+   TAR="-z"
+elif [ "$FORMAT" = "tar.bz2" ]
+then
+   TAR="-j"
+elif [ "$FORMAT" = "tar.xz" ]
+then
+   FILTER="xz --verbose -9e -c"
+fi
+
+printf "$FILE" | xargs -0 tar -c $TAR -- | $FILTER |
+   if [ "$EXTENSION" = ".gpg" ]
+   then
+      gpg --yes --s2k-count 65011712 -c
+   else
+      cat -
+   fi | if [ "${OUTPUT_DIR}" = "-" ] # Decide whether to compress to stdout or not
+        then
+           cat -
+        else
+           cat - > "${OUTPUT_DIR}/${OUTPUTFILENAME}"
+        fi
+
+
+if [ ! "${OUTPUT_DIR}" = "-" ]
+then
+   # Create parity redundancy
+   if [ $RLEVEL -gt 0 ]
+   then
+      echo -n "\nCreating redundancy (parity files) @ ${RLEVEL}% redundancy..."
+      par2 c -q -r${RLEVEL} -- "${OUTPUT_DIR}/${OUTPUTFILENAME}"
+   fi
+
+   echo "\nOutput files:"
+   eval 'du -h -- "${OUTPUT_DIR}/${OUTPUTFILENAME}"*'
+fi
