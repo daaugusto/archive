@@ -88,7 +88,7 @@ then
    do
       # Is there associated parity files (.par2)? If so, try to repair the archive
       [ -e "${F}.par2" ] || { echo "Parity files ($F.par2*) not found, repair is impossible..."; exit 1; }
-      echo "Trying to repair file '$F'...\n"
+      echo "Trying to repair file '$F'..."; echo
       par2 r -N -v -- "${F}";
    done || exit 1;
 
@@ -223,10 +223,10 @@ then
    # Create parity redundancy
    if [ $RLEVEL -gt 0 ]
    then
-      echo -n "\nCreating redundancy (parity files) @ ${RLEVEL}% redundancy..."
+      echo; echo -n "Creating redundancy (parity files) @ ${RLEVEL}% redundancy..."
       par2 c -q -r${RLEVEL} -- "${OUTPUT_DIR}/${OUTPUTFILENAME}"
    fi
 
-   echo "\nOutput files:"
+   echo; echo "Output files:"
    eval 'du -h -- "${OUTPUT_DIR}/${OUTPUTFILENAME}"*'
 fi
