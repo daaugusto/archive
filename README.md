@@ -73,7 +73,7 @@ Output files:
 archive -e secret_dir/
 ```
 
-This will as for a password and will produce the following output:
+This will ask for a password and will produce the following output:
 
 ```
 Compressing files to ./20210831-secret_dir.tgz.gpg...                                              
@@ -105,4 +105,4 @@ archive -R important_dir.tgz
 
 # Dependencies
 
-tar, xz, par2, gpg, du, a pass-phrase entry dialog (ex: pinentry-curses)
+tar; xz; par2; gpg; du; a pass-phrase entry dialog (ex: pinentry-curses or pinentry-gnome3), which should set in `~/.gnupg/gpg-agent.conf` as `pinentry-program /usr/bin/pinentry-curses` for instance.
